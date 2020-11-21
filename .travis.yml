@@ -1,0 +1,27 @@
+language: python
+python:
+  - '3.6'
+  - '3.7'
+  - '3.8'
+  - '3.9'
+before_install:
+  - python --version
+  - pip install -U pip
+  - pip install pytest-cov
+  - pip install codecov
+install:
+  - pip install "." # install package
+script:
+  - py.test --cov-report term --cov=pysql tests/
+after_success:
+  - codecov  # submit coverage
+deploy:
+  provider: pypi
+  user: ZiggerZZ
+  password:
+    secure: mDWKSTWOQfs1rITS3tChBp5SSmHqthyAcKyd1r08kbuQrMfXQC+nOqHPQVxbFc4jXeetJdpeegcgV2kgvD5nxiNRDsDPj2CrVoOOoQRR6UG5VTVcPgj3tJpxIZrazZhp6z7L96St1UgpB1beEKoDZMElbBtT2L3COMObhEF2CT0luKUA3hPdSua1z4doSJsbhGGqXbinL3Ok7icqceVPEa77/Xv0qHwRB23GiyXznkEgrNH7HyLAyMjmtt+v1uRl/PxPZal1wsOI8lNAO/iICK5aXJXTlmJttHl29OWx0iiB6KLVVo0a2DZkn9j+nz0j4JGwdOrVimK+gLcg2Sygtf2VkA+InguPiHl8qvRau2w8KhMZmI7DVu9+/Gt8JgbJ+ZeJGrBSA2K3gOYIjEgPWuIuZbjxhOZwKn5vX3viyNtvDETQD1pEpkzCj5UIUZA3x9NjpqRPv2L9wW895oYoNZboZ8+M/lCntByTLtOO5bUuFP+wvCIq5gmnjkerC0rnvLocmYP5F952KLNLexZFid0a/TxcpldfMh8zOOgB19mXkTvVxr2GRnkH6XtUTwhUFuYIwB5ejhd92Qm/XAvRja8IRe9vsbprC1DA0d45Br8uMLSHNI3BD3473nt0sbb+pMgSm50wE6XRhrZfkqlljWKoLLtpFFtI4o4B93apqxA=
+  distributions: sdist bdist_wheel
+  edge: true
+  on:
+    python: 3.6
+    tags: true

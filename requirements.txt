@@ -1,0 +1,8 @@
+pandas
+pandas_gbq
+google-auth
+pytz
+# google-oauth2
+flask
+bigquery_schema_generator
+# hug
