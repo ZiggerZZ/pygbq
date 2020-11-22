@@ -14,7 +14,6 @@ from flask import Flask, request
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 import logging
 # from google.api_core.exceptions import BadRequest
-from pandas_gbq.gbq import GenericGBQException
 
 app = Flask(__name__)
 
@@ -55,10 +54,7 @@ pandas_gbq.context.project = PROJECT_ID  # might put it to a config file
 
 class MyError(Exception):
     """Basic exception for errors raised by pysql"""
-    def __init__(self, msg=None):
-        if msg is None:
-            # Set some default useful error message
-            msg = f"An error occurred with car"
+    def __init__(self, msg="An error occurred in pysql"):
         super(MyError, self).__init__(msg)
 
 # class CarCrashError(CarError):
@@ -70,21 +66,21 @@ class MyError(Exception):
 #         self.other_car = other_car
 
 
-def table(table, **kwargs):
+def table(table_name, **kwargs):
     """
-    :arg table: "dataset_id.table_name" (no backticks) or an SQL query
+    :arg table_name: "dataset_id.table_name" (no backticks) or an SQL query
     """
     # if 'query' in kwargs: kwargs['query']
     # maybe add a parameter rows not to return df
-    if " " not in table:
-        query = f"SELECT * FROM `{PROJECT_ID}.{table}`"
+    if " " not in table_name:
+        query = f"SELECT * FROM `{PROJECT_ID}.{table_name}`"
     else:
-        query = table
+        query = table_name
     try:
         return read_gbq(query=query, **kwargs)
-    except GenericGBQException as E:
+    except pandas_gbq.gbq.GenericGBQException as E:
         # logging.getLogger().error("Something bad happened", exc_info=True)
-        raise MyError from E
+        raise MyError(f"Your query '{query}' is incorrect") from E
 
 
 def parametrized(dec):
@@ -181,10 +177,6 @@ def update_table_using_temp(data, table_id, how, schema, after: str = None,
             query = query_template.format(table=table_name, table_tmp=table_name + '_tmp_' + tmp_id, DATASET=dataset)
             query_job = client.query(query)
             query_job.result()  # Waits for job to complete.
-    if after:
-        query_job = client.query(after)
-        query_job.result()
-        # should add to result if fails
     return {
         "message": f"Status when pushing {table_name}",
     }
@@ -265,7 +257,7 @@ def read_jsonl(name: str = 'data.jsonl'):
             for line in f:
                 data.append(json.loads(line))
     except Exception as E:
-        raise Exception(f"Couldn't read data from {name}, check if it is a newline delimited json")
+        raise MyError(f"Couldn't read data from {name}, check if it is a newline delimited json") from E
     return data
 
 
@@ -309,6 +301,8 @@ def gbq(function, table_id: str = None, how: str = None, save: Union[bool, str] 
     Bool parameter start_now (defaults to True) indicates whether to create a table now or wait until cron job does it
     :arg expiration: default None
     """
+
+    # test correctness of table and dataset #
     if table_id:
         if '.' in table_id:
             dataset, table_name = table_id.split('.')
@@ -319,24 +313,28 @@ def gbq(function, table_id: str = None, how: str = None, save: Union[bool, str] 
         if dataset:
             table_id = dataset + '.' + function.__name__
         else:
-            raise ValueError(f"Either provide full name of the table or set dataset with pysql.set_dataset()")
+            raise MyError(f"Either provide full name of the table or set dataset with pysql.set_dataset()")
     try:
         client.get_dataset(dataset)
-    except Exception:
-        raise ValueError(f"Dataset {dataset} does not exist")
+    except Exception as E:
+        raise MyError(f"Dataset {dataset} does not exist") from E
 
     if how == 'test':
         table_id = table_id + '_test'
         how = 'replace'
 
-    if how == 'fail' and table_exists(table_id):
+    # test correctness of `how` #
+    table_exists_bool = table_exists(table_id)
+    if how == 'fail' and table_exists_bool:
         # TODO: this is a copy paste from pandas-gbq
-        raise TableCreationError(
+        raise MyError(  #
             "Could not create the table because it "
             "already exists. "
             "Change the if_exists parameter to "
             "'insert' or 'replace' data."
         )
+    if (isinstance(how, list) or how == 'insert') and not table_exists_bool:
+        raise MyError(f"You are trying to merge with or insert in {table_id} which does not exist")
 
     def inner(**kwargs):
         def _save_file_name(extension: str = ''):
@@ -365,12 +363,12 @@ def gbq(function, table_id: str = None, how: str = None, save: Union[bool, str] 
         nonlocal how
         returned = function(**kwargs)
         # print(f"Going to update {PROJECT_ID}.{table_id}...")
-        if len(returned) == 2:
+        if isinstance(returned, tuple) and len(returned) == 2:
             data, schema = returned
         elif isinstance(returned, DataFrame) or isinstance(returned, list):
             data, schema = returned, None
         else:
-            raise Exception('Return either list; df; (list, schema); (df, schema)')
+            raise MyError('Return either list; df; (list, schema); (df, schema)')
         if isinstance(returned, DataFrame):
             try:
                 if save:
@@ -384,8 +382,7 @@ def gbq(function, table_id: str = None, how: str = None, save: Union[bool, str] 
                 data.to_gbq(table_id, project_id=PROJECT_ID, if_exists=how, table_schema=schema)
                 print(f"Created")
             except Exception as E:
-                # this is equivalent to run the code without try-except
-                raise E
+                raise MyError('Something bad happend') from E
         elif isinstance(data, list):
             if save:
                 name = _save_file_name('json')
@@ -401,13 +398,20 @@ def gbq(function, table_id: str = None, how: str = None, save: Union[bool, str] 
                             # or just schema as it's the right format
                         except Exception as E:
                             raise E
-                    elif how in ['fail', 'replace', 'test']:
+                    elif how in {'fail', 'replace', 'test'}:
                         try:
                             how = 'replace'
                             schema = generate_schema(data)
                         except Exception:
                             raise Exception('Generating schema failed, provide schema')
                 update_table_using_temp(data, table_id, how, schema, after)
+            if after:
+                query_job = client.query(after)
+                try:
+                    query_job.result()
+                except Exception as E:
+                    raise MyError(f"Your query '{after}' is incorrect") from E
+                # should add to result if fails
         else:
             print("Error")
         # raise Exceptions or set status=False and message=Exception ?

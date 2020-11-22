@@ -28,7 +28,7 @@ def my_table():
     # might be useful for some combination of parameters and not for others
 
 
-@gbq()
+@gbq(how='insert', after="SELECT * FROM")
 def reddit(date="2020-01-01"):
     # do some parsing
     print(date)
@@ -38,7 +38,7 @@ def reddit(date="2020-01-01"):
 
 
 if __name__ == "__main__":
-    table("SELECT * FROM")
+    # table("SELECT * FROM")
     # print_dataset()
     # my_table()
-    # reddit()
+    reddit()
