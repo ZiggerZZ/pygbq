@@ -12,7 +12,7 @@ before_install:
 install:
   - pip install "." # install package
 script:
-  - py.test --cov-report term --cov=pysql tests/
+  - py.test --cov-report term --cov=pygbq tests/
 after_success:
   - codecov  # submit coverage
 deploy:
