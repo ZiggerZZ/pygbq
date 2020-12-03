@@ -14,7 +14,7 @@ from pathlib import Path
 import random
 from subprocess import check_output
 
-# from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import List, Union  # Optional, Any, Dict,
 
 logging_client = google.cloud.logging.Client()
 logging_client.get_default_handler()
@@ -324,7 +324,7 @@ def generate_schema(data):
 def gbq(
     function,
     table_id: str = None,
-    how: str = None,
+    how: Union[str, List[str]] = None,
     save_dir: str = None,
     after: str = None,
     test: str = None,
