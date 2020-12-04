@@ -14,7 +14,7 @@ from pathlib import Path
 import random
 from subprocess import check_output
 
-from typing import List, Union  # Optional, Any, Dict,
+from typing import List, Union, Any, Callable  # Optional, Dict
 
 logging_client = google.cloud.logging.Client()
 logging_client.get_default_handler()
@@ -312,7 +312,6 @@ def generate_schema(data):
 # if good how, good test and bad after return {'how_status': 200, 'test_status': 200, 'after_status': '400'}
 # if good how, good test and good after return {'how_status': 200, 'test_status': 200, 'after_status': '200'}
 
-# TODO: move schema from inside function to the decorator, or not, because sometimes schema is dynamical within function
 # or make a tuple (sql, result), where sql must return a df == result, and raise error TestFailError
 # possible cases for test:
 # * check there is no duplicates in the final table:
@@ -323,9 +322,10 @@ def generate_schema(data):
 # where "date" must be an argument from the function
 @parametrized
 def gbq(
-    function,
+    function: Callable[[Any], List[dict]],  # any arguments and returns a list of dicts
     table_id: str = None,
     how: Union[str, List[str]] = None,
+    schema: Union[str, List[dict]] = None,
     save_dir: str = None,
     after: str = None,
     test: str = None,
@@ -340,6 +340,7 @@ def gbq(
     TODO: rename fail to create, maybe keep create, replace, create or replace
     :arg table_id: name of the destination table in the format "dataset.table_name".
     table_name defaults to function.__name__
+    :arg schema: path to schema or schema as list of dicts
     :arg after: query that needs to be executed in the end. accepts format with function arguments
     :arg test: query that tests something are return True or False
     :arg service: dict, creates an App Engine service and sets a cron job with the parameters specified in the dict.
@@ -421,16 +422,12 @@ def gbq(
             file_name = f"{file_name}.{extension}"
             return Path(".") / save_dir / file_name
 
-        nonlocal how
-        returned = function(**kwargs)
-        # print(f"Going to update {PROJECT_ID}.{table_id}...")
-        if isinstance(returned, tuple) and len(returned) == 2:
-            data, schema = returned
-        elif isinstance(returned, DataFrame) or isinstance(returned, list):
-            data, schema = returned, None
-        else:
-            raise MyError("Return either list; df; (list, schema); (df, schema)")
-        if isinstance(returned, DataFrame):
+        nonlocal how, schema
+        data = function(**kwargs)
+        # check type
+        if not( isinstance(data, DataFrame) or isinstance(data, list)):
+            raise MyError(f"Returned {type(data)}. Need either list or df.")
+        if isinstance(data, DataFrame):
             try:
                 if save_dir:
                     name = _save_file_name("csv")
@@ -479,7 +476,7 @@ def gbq(
                     result = client.query(test.format(**kwargs)).result()
                 except Exception as E:
                     logging.exception(f"Bad test query: {test}")
-                    return {"status": "fail", "data_len": len(data), **kwargs}
+                    return {"status": "fail", "data_len": len(data), "data": data, **kwargs}
                     # raise MyError(f"Bad test query: {test}") from E
                 if result.total_rows != 1:
                     logging.exception(
