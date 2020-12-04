@@ -2,6 +2,7 @@ from .pygbq import (
     gbq,
     table,
     set_dataset,
+    set_service_key_path,
     MyError,
     read_jsonl,
     generate_schema,

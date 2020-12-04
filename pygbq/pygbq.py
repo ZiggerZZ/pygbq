@@ -168,7 +168,8 @@ def update_table_using_temp(
             len_schema = len(schema)
             update_row = ""
             for j, f in enumerate(schema):
-                update_row = update_row + f["name"] + " = S." + f["name"]
+                update_row = update_row + f'`{f["name"]}` = S.{f["name"]}'
+                # update_row = update_row + f["name"] + " = S." + f["name"]
                 if j < len_schema - 1:
                     update_row = update_row + ",\n"
             return update_row
@@ -345,6 +346,7 @@ def gbq(
     Service name defaults to "pygbq" and endpoint is function name, could be rewritten.
     https://cloud.google.com/appengine/docs/admin-api/getting-started
     Bool parameter start_now (defaults to True) indicates whether to create a table now or wait until cron job does it
+    RETURNS a dict with data in it
     """
 
     # Test correctness of table_id and set dataset and table_name
@@ -468,7 +470,10 @@ def gbq(
                             schema = generate_schema(data)
                         except Exception:
                             raise Exception("Generating schema failed, provide schema")
-                update_table_using_temp(data, table_id, how, schema)
+                if data:
+                    update_table_using_temp(data, table_id, how, schema)
+                else:
+                    logging.warning('Data is empty')
             if test:
                 try:
                     result = client.query(test.format(**kwargs)).result()
@@ -520,7 +525,7 @@ def gbq(
                 # should add to result if fails
         else:  # shouldn't happen because I check return type before
             raise MyError("Return either list; df; (list, schema); (df, schema)")
-        return {"status": "success", "data_len": len(data), **kwargs}
+        return {"status": "success", "data_len": len(data), "data": data, **kwargs}
 
     return inner
 
