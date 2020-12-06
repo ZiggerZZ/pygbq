@@ -17,7 +17,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="pygbq",
-    version="0.19",
+    version="0.20",
     author="Zigfrid Zvezdin",
     author_email="ziggerzz@gmail.com",
     description="Easily integrate data in BigQuery",

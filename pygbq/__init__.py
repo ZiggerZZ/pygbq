@@ -9,4 +9,5 @@ from .pygbq import (
     get_secret,
     add_secret,
     update_table_using_temp,
+    Client
 )

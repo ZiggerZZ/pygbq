@@ -124,8 +124,9 @@ def parametrized(dec):
 
 
 # TODO: dynamically set max_insert_num_rows
+# TODO: move all table_id, how, schema logic here to be able to call this function separately
 def update_table_using_temp(
-    data, table_id, how, schema, expiration=1, max_insert_num_rows=4000
+    data, table_id, how, schema: Union[str, List[dict]] = None, expiration=1, max_insert_num_rows=4000
 ):
     """
     Creates a temp table, inserts rows there, then merges the table with the main table.
@@ -133,7 +134,7 @@ def update_table_using_temp(
     :param data: list of dicts
     :param table_id: table_id
     :param how: table_id
-    :param schema: path to the schema of temp table or the schema itself
+    :param schema: path to the schema of temp table or the schema itself or None (then generate schema)
     :param expiration: how many hours temporary tables live before expiration
     :param max_insert_num_rows: we will split data into batches of this size
     """
@@ -207,17 +208,33 @@ def update_table_using_temp(
             raise MyDataError(row=data_batch[index], error_info=error_info)
 
     data_batches = [
-        data[i * max_insert_num_rows : (i + 1) * max_insert_num_rows]
+        data[i * max_insert_num_rows: (i + 1) * max_insert_num_rows]
         for i in range((len(data) + max_insert_num_rows - 1) // max_insert_num_rows)
     ]
 
-    if isinstance(schema, str):
+    if schema is None:
+        if isinstance(how, list) or how == "insert":
+            try:
+                schema = [
+                    field.to_api_repr()
+                    for field in client.get_table(table_id).schema
+                ]
+                # or just schema as it's the right format
+            except Exception as E:
+                raise E
+        elif how in {"fail", "replace", "test"}:
+            how = "replace"
+            try:
+                schema = generate_schema(data)
+            except Exception:
+                raise Exception("Generating schema failed, provide schema")
+    elif isinstance(schema, str):
         fp = open(schema, "r")
         schema = json.load(fp)
         fp.close()
 
-    query_template = prepare_query() if isinstance(how, list) else None
     schema_api = _gen_schema(schema)
+    query_template = prepare_query() if isinstance(how, list) else None
 
     table = None
     for data_batch in data_batches:
@@ -424,8 +441,9 @@ def gbq(
 
         nonlocal how, schema
         data = function(**kwargs)
+        results = {"data_len": len(data), "data": data, **kwargs}
         # check type
-        if not( isinstance(data, DataFrame) or isinstance(data, list)):
+        if not(isinstance(data, DataFrame) or isinstance(data, list)):
             raise MyError(f"Returned {type(data)}. Need either list or df.")
         if isinstance(data, DataFrame):
             try:
@@ -451,26 +469,13 @@ def gbq(
                 except Exception:
                     print(f"Couldn't save file {name}")
             if how:
-                if not schema:
-                    if isinstance(how, list) or how == "insert":
-                        try:
-                            schema = [
-                                field.to_api_repr()
-                                for field in client.get_table(table_id).schema
-                            ]
-                            # or just schema as it's the right format
-                        except Exception as E:
-                            raise E
-                    elif how in {"fail", "replace", "test"}:
-                        try:
-                            how = "replace"
-                            schema = generate_schema(data)
-                        except Exception:
-                            raise Exception("Generating schema failed, provide schema")
                 if data:
                     update_table_using_temp(data, table_id, how, schema)
+                    results["status"] = "success"
                 else:
                     logging.warning('Data is empty')
+                    results["status"] = "data is empty"
+            # TODO: add proper test_status
             if test:
                 try:
                     result = client.query(test.format(**kwargs)).result()
@@ -490,6 +495,7 @@ def gbq(
                         logging.exception(
                             f"'{test}' must return exactly one boolean value, but returned {len(row)} columns"
                         )
+                        test_status = f"'{test}' must return exactly one boolean value, but returned {len(row)} columns"
                         # raise MyTestError(
                         #     msg=f"'{test}' must return exactly one boolean value, but returned {len(row)} columns")
                     value = row[0]
@@ -519,10 +525,10 @@ def gbq(
                     )  # this way we get E but not MyError
                     # well, maybe this is not too bad since I send the info I want to send
                     # raise MyError(f"Your query '{after}' is incorrect") from E
-                # should add to result if fails
+                results["after_status"] = after_status
         else:  # shouldn't happen because I check return type before
             raise MyError("Return either list; df; (list, schema); (df, schema)")
-        return {"status": "success", "data_len": len(data), "data": data, **kwargs}
+        return results
 
     return inner
 
@@ -547,3 +553,229 @@ def add_secret(secret_id, data):
     payload = secretmanager.types.SecretPayload(data=data.encode("UTF-8"))
     response = secretmanager_client.add_secret_version(parent=parent, payload=payload)
     print("Added secret version: {}".format(response.name))
+
+
+class Client:
+    """Initialize client.
+    Usage:
+        client = Client(default_dataset, path_to_key)
+        data = [{...}, {...}]
+        client.update_table(table_name, how)
+    """
+    def __init__(self, default_dataset: str = None, path_to_key: str = None):
+        self.default_dataset = default_dataset
+
+        credentials, self.project_id = load_credentials_from_file(
+            path_to_key,
+            scopes=[
+                "https://www.googleapis.com/auth/drive",
+                "https://www.googleapis.com/auth/bigquery",
+            ],
+        ) if path_to_key else default_creds(
+                scopes=[
+                    "https://www.googleapis.com/auth/drive",
+                    "https://www.googleapis.com/auth/bigquery",
+                ]
+            )
+
+        self.client = bigquery.Client(credentials=credentials, project=self.project_id)
+        self.secretmanager_client = None
+
+    # TODO: dynamically set max_insert_num_rows
+    # TODO: move all table_id, how, schema logic here to be able to call this function separately
+    def update_table_using_temp(
+            self, data, table_id, how, schema: Union[str, List[dict]] = None,
+            expiration=1, max_insert_num_rows=4000
+    ):
+        """
+        Creates a temp table, inserts rows there, then merges the table with the main table.
+        Destroys the temp table after expiration time.
+        :param data: list of dicts
+        :param table_id: either table_name if default dataset is set else table_id (possibly with project_id)
+        :param how: table_id
+        :param schema: path to the schema of temp table or the schema itself or None (then generate schema)
+        :param expiration: how many hours temporary tables live before expiration
+        :param max_insert_num_rows: we will split data into batches of this size
+        """
+
+        def _id_generator(size=10, chars=string.ascii_uppercase + string.digits):
+            return "".join(random.choice(chars) for _ in range(size))
+
+        def _gen_schema(schema_dict):
+            schema_list = []
+            for field in schema_dict:
+                if field["type"] != "RECORD":
+                    schema_list.append(
+                        bigquery.schema.SchemaField(
+                            field["name"], field["type"], mode=field["mode"]
+                        )
+                    )
+                else:
+                    schema_list.append(
+                        bigquery.schema.SchemaField(
+                            field["name"],
+                            field["type"],
+                            mode=field["mode"],
+                            fields=tuple(_gen_schema(field["fields"])),
+                        )
+                    )
+            return schema_list
+
+        def prepare_query():
+            """Prepares query template"""
+
+            def _parse_schema():
+                len_schema = len(schema)
+                update_row = ""
+                for j, f in enumerate(schema):
+                    update_row = update_row + f'`{f["name"]}` = S.{f["name"]}'
+                    # update_row = update_row + f["name"] + " = S." + f["name"]
+                    if j < len_schema - 1:
+                        update_row = update_row + ",\n"
+                return update_row
+
+            # list of ids. one id should be put in the list, can't make it optional
+            update_set = _parse_schema()
+            condition = ""
+            num_ids = len(how)
+            for i, field in enumerate(how):
+                condition = condition + f"T.{field} = S.{field}"
+                if i < num_ids - 1:
+                    condition = condition + " AND "
+            q = (
+                    """MERGE `{table_id}` T 
+            USING `{table_tmp_id}` S
+              ON """
+                    + condition
+                    + """
+        WHEN NOT MATCHED THEN
+          INSERT ROW
+        WHEN MATCHED THEN
+          UPDATE SET
+        """
+                    + update_set
+            )
+            return q
+
+        def handle_errors():
+            """Print the first error and the row that caused the error"""
+            if not errors:
+                print("New rows have been added to", table.table_id)
+            else:
+                # print("ERROR", errors)
+                index, error_info = errors[0]["index"], errors[0]["errors"]
+                raise MyDataError(row=data_batch[index], error_info=error_info)
+
+        if table_id:
+            if not table_id.replace("_", "").replace(".", "").isalnum():
+                raise MyNameError(
+                    "Bad table name: only letters, numbers and underscores allowed"
+                )
+            num_dots = table_id.count(".")
+            # if table_id = table_name
+            if num_dots == 0:
+                table_id = f"{self.project_id}.{self.default_dataset}.{table_id}"
+            # if table_id = dataset.table_name
+            elif num_dots == 1:
+                table_id = f"{self.project_id}.{table_id}"
+            # if table_id = project_id.dataset.table_name
+            elif num_dots == 2:
+                pass
+            else:
+                raise MyNameError("Bad table name")
+        else:
+            MyNameError("'table_id' must be set")
+
+        data_batches = [
+            data[i * max_insert_num_rows: (i + 1) * max_insert_num_rows]
+            for i in range((len(data) + max_insert_num_rows - 1) // max_insert_num_rows)
+        ]
+
+        if schema is None:
+            if isinstance(how, list) or how == "insert":
+                try:
+                    schema = [
+                        field.to_api_repr()
+                        for field in self.client.get_table(table_id).schema
+                    ]
+                    # or just schema as it's the right format
+                except Exception as E:
+                    raise E
+            elif how in {"fail", "replace", "test"}:
+                how = "replace"
+                try:
+                    schema = generate_schema(data)
+                except Exception:
+                    raise Exception("Generating schema failed, provide schema")
+        elif isinstance(schema, str):
+            fp = open(schema, "r")
+            schema = json.load(fp)
+            fp.close()
+
+        schema_api = _gen_schema(schema)
+        query_template = prepare_query() if isinstance(how, list) else None
+
+        table = None
+        for data_batch in data_batches:
+            if how == "insert":
+                # if replace then we already have table
+                if not table:
+                    table = client.get_table(table_id)
+                errors = client.insert_rows(table, data_batch)
+                handle_errors()
+            elif how == "replace":
+                table = bigquery.Table(table_id, schema=schema_api)
+                table = client.create_table(table, exists_ok=True)  # exists_ok = True
+                errors = client.insert_rows(table, data_batch)
+                handle_errors()
+                how = "insert"
+            elif isinstance(how, list):
+                tmp_id = _id_generator()
+                table_tmp_id = f"{table_id}_tmp_{tmp_id}"
+
+                table = bigquery.Table(table_tmp_id, schema=schema_api)
+                table = client.create_table(table)
+                print(f"Created table {table_tmp_id}")
+
+                # set table to expire expiration hours from now
+                table.expires = datetime.datetime.now(pytz.utc) + datetime.timedelta(
+                    hours=expiration
+                )
+                table = client.update_table(table, ["expires"])  # API request
+
+                print(f"Updated expiration date of table {table_tmp_id}")
+
+                print(f"Going to insert {len(data_batch)} rows to {table.table_id}")
+                errors = client.insert_rows(table, data_batch)
+                handle_errors()
+
+                # insert without duplicates
+                query = query_template.format(table_id=table_id, table_tmp_id=table_tmp_id)
+                query_job = client.query(query)
+                try:
+                    query_job.result()  # Waits for job to complete.
+                except google.api_core.exceptions.BadRequest as E:
+                    raise MyError("Error with MERGE") from E
+        return {"status": 200}
+
+    def get_secret(self, secret_id, version="latest"):
+        """
+        Access the payload for the given secret version if one exists. The version
+        can be a version number as a string (e.g. "5") or an alias (e.g. "latest").
+        """
+        if self.secretmanager_client is None:
+            self.secretmanager_client = secretmanager.SecretManagerServiceClient()
+        secret_path = f"projects/{PROJECT_ID}/secrets/{secret_id}/versions/{version}"
+        response = self.secretmanager_client.access_secret_version(name=secret_path)
+        return response.payload.data.decode("UTF-8")
+
+    def add_secret(self, secret_id, data):
+        """
+        Add a new secret version to the given secret with the provided data.
+        """
+        if self.secretmanager_client is None:
+            self.secretmanager_client = secretmanager.SecretManagerServiceClient()
+        parent = f"projects/{PROJECT_ID}/secrets/{secret_id}"
+        payload = secretmanager.types.SecretPayload(data=data.encode("UTF-8"))
+        response = self.secretmanager_client.add_secret_version(parent=parent, payload=payload)
+        print("Added secret version: {}".format(response.name))
