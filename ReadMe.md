@@ -7,13 +7,13 @@
 The following snippet
 
 ```python
-from pygbq import gbq, set_dataset
-set_dataset('Finance')
+from pygbq import Client
+import requests
+client = Client(default_dataset='Finance')
 
-
-@gbq(how='replace')
+@client.gbq(how='replace')
 def transactions(start_date):
-    data = ...
+    data = requests.get(url='some/api/endpoint', headers={'start_date': start_date}).json()
     return data
 
 if __name__ == "__main__":
