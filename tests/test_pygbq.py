@@ -20,35 +20,36 @@ client = pygbq.Client()
 
 def test_replace():
     data = [{'id': 1, 'string_column': 'test_replace_1'}, {'id': 2, 'string_column': 'test_replace_2'}]
-    results = client.update_table_using_temp(data=data, table_id='test.test_table', how='replace')
+    results = client.update_table_using_temp(data=data, table_id='test_dataset.test_table', how='replace')
     assert results == {"status": 200}
 
 
 def test_insert():
     data = [{'id': 3, 'string_column': 'test_insert_3'}, {'id': 4, 'string_column': 'test_insert_4'}]
-    results = client.update_table_using_temp(data=data, table_id='test.test_table', how='insert')
+    results = client.update_table_using_temp(data=data, table_id='test_dataset.test_table', how='insert')
     assert results == {"status": 200}
 
 
 def test_merge():
     data = [{'id': 1, 'string_column': 'test_merge_1'}, {'id': 2, 'string_column': 'test_merge_2'},
             {'id': 3, 'string_column': 'test_merge_3'}, {'id': 4, 'string_column': 'test_merge_4'}]
-    results = client.update_table_using_temp(data=data, table_id='test.test_table', how=['id'])
+    results = client.update_table_using_temp(data=data, table_id='test_dataset.test_table', how=['id'])
     assert results == {"status": 200}
 
 
-def test_gbq():
-
-    @client.gbq(table_id='test.test_table', how=['id'])
-    def test_table():
-        data = [{'id': 5, 'string_column': 'test_gbq_5'}, {'id': 6, 'string_column': 'test_gbq_6'}]
-        return data
-
-    assert test_table() == {'status': 'success', 'data_len': 1}
+# def test_gbq():
+#
+#     @client.gbq(table='test_dataset.test_table', how=['id'])
+#     def test_table():
+#         data = [{'id': 5, 'string_column': 'test_gbq_5'}, {'id': 6, 'string_column': 'test_gbq_6'}]
+#         return data
+#
+#     assert test_table() == {'status': 'success', 'data_len': 2}
 
 
 def test_test():
     assert client.test(test='SELECT 1=1', arguments={}) is True
+    assert client.test(test='SELECT 1=2', arguments={}) is False
 
 
 # no need to check it outside of gbq
@@ -91,24 +92,24 @@ def test_test():
     pass
 
 
-def test_bad_return_type():
-    with pytest.raises(pygbq.MyError):  # f"Your query '{query}' is incorrect"
-        @client.gbq()
-        def data():
-            return 1, 2, 3
-
-
-def test_bad_after():
-    """
-    * good after
-    * bad after
-    """
-    after = 'SELECT * FROM'
-
-    with pytest.raises(pygbq.MyError):  # f"Your query '{query}' is incorrect"
-        @client.gbq(after=after)
-        def data():
-            return []
+# def test_bad_return_type():
+#     with pytest.raises(pygbq.MyError):  # f"Your query '{query}' is incorrect"
+#         @client.gbq()
+#         def data():
+#             return 1, 2, 3
+#
+#
+# def test_bad_callback():
+#     """
+#     * good after
+#     * bad after
+#     """
+#     callback = 'SELECT * FROM'
+#
+#     with pytest.raises(pygbq.MyError):  # f"Your query '{query}' is incorrect"
+#         @client.gbq(callback=callback)
+#         def data():
+#             return []
 
 # def test_schema():
 #     data = [{"one_column": 1}, {"one_column": 2}]
@@ -118,7 +119,7 @@ def test_bad_after():
 
 def test_read_jsonl_bad():
     bad_filename = "test_bad_filename"
-    with pytest.raises(pygbq.MyError):
+    with pytest.raises(pygbq.PyGBQError):
         pygbq.read_jsonl(name=bad_filename)
 
 

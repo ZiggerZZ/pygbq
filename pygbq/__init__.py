@@ -1,6 +1,7 @@
 from .pygbq import (
-    # table,
-    MyError,
+    Client,
     read_jsonl,
-    Client
+    PyGBQError,
+    PyGBQNameError,
+    PyGBQDataError,
 )

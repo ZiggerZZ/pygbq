@@ -1,8 +1,9 @@
-pandas
-pandas_gbq
+pandas==1.1.5
+pandas-gbq==0.14.1
 pytz
-google-auth
-google-cloud-bigquery
-google-cloud-logging
-google-cloud-secret-manager
-bigquery_schema_generator
+google-auth==1.24.0
+google-cloud-bigquery==2.6.1
+google-cloud-logging==2.0.1
+google-cloud-secret-manager==2.1.0
+bigquery_schema_generator==1.4
+# pytest-cov

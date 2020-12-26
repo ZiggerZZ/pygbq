@@ -13,6 +13,7 @@ import string
 from pathlib import Path
 import random
 from bigquery_schema_generator.generate_schema import SchemaGenerator
+import time
 
 from typing import List, Union, Any, Callable, OrderedDict  # Optional, Dict
 
@@ -21,32 +22,25 @@ logging_client.get_default_handler()
 logging_client.setup_logging()
 
 
-class MyError(Exception):
+class PyGBQError(Exception):
     """Basic exception for errors raised by pygbq"""
 
     def __init__(self, msg="An error occurred in pygbq"):
-        super(MyError, self).__init__(msg)
+        super(PyGBQError, self).__init__(msg)
 
 
-class MyNameError(MyError):
+class PyGBQNameError(PyGBQError):
     """When test fails"""
 
     def __init__(self, msg="Bad table/dataset name"):
-        super(MyNameError, self).__init__(msg=msg)
+        super(PyGBQNameError, self).__init__(msg=msg)
 
 
-class MyTestError(MyError):
-    """When test fails"""
-
-    def __init__(self, msg="Bad test query"):
-        super(MyTestError, self).__init__(msg=msg)
-
-
-class MyDataError(MyError):
+class PyGBQDataError(PyGBQError):
     """When test fails"""
 
     def __init__(self, row, error_info):
-        super(MyDataError, self).__init__(
+        super(PyGBQDataError, self).__init__(
             msg=f"Row {row} caused the following errors:\n{error_info}"
         )
 
@@ -65,7 +59,7 @@ class MyDataError(MyError):
 #         return read_gbq(query=query, **kwargs)
 #     except pandas_gbq.gbq.GenericGBQException as E:
 #         # logging.getLogger().error("Something bad happened", exc_info=True)
-#         raise MyError(f"Your query '{query}' is incorrect") from E
+#         raise PyGBQError(f"Your query '{query}' is incorrect") from E
 
 
 def parametrized(dec):
@@ -96,7 +90,7 @@ def read_jsonl(name: str = "data.jsonl"):
             for line in f:
                 data.append(json.loads(line))
     except Exception as E:
-        raise MyError(
+        raise PyGBQError(
             f"Couldn't read data from {name}, check if it is a newline delimited json"
         ) from E
     return data
@@ -180,8 +174,9 @@ class Schema:
         generator = SchemaGenerator('dict')
         schema_map, error_logs = generator.deduce_schema(data)
         if error_logs:
-            raise MyError('Could not generate schema, please provide a schema')
-        return schema_map
+            raise PyGBQError('Could not generate schema, please provide a schema')
+        schema = generator.flatten_schema(schema_map)
+        return schema
 
 
 class Update:
@@ -195,11 +190,13 @@ class Update:
         self.how = how
         self.table_id = table_id
         self.schema = schema
-        self.query_template = self.prepare_query()
+        if isinstance(how, list):
+            self.query_template = self.prepare_query()
         self.expiration = expiration
         self.errors = []
 
     def merge(self, data_batch):
+        # TODO: read https://cloud.google.com/bigquery/streaming-data-into-bigquery#template-tables
         tmp_id = _id_generator()
         table_tmp_id = f"{self.table_id}_tmp_{tmp_id}"
 
@@ -222,10 +219,31 @@ class Update:
         try:
             query_job.result()  # Waits for job to complete.
         except google.api_core.exceptions.BadRequest as E:
-            raise MyError("Error with MERGE") from E
+            # catch streaming buffer error because it will be fixed in at max 90 minutes
+            if 'affect rows in the streaming buffer, which is not supported' in repr(E):
+                logging.exception(E)
+            elif 'UPDATE/MERGE must match at most one source row for each target row' in repr(E):
+                backtick_fields = ', '.join(map(lambda s: f"`{s}`", self.how))
+                query = f"""SELECT T.* FROM `{self.table_id}` T
+JOIN (SELECT {backtick_fields}, COUNT(*)
+    FROM `{self.table_id}`
+    GROUP BY {backtick_fields}
+    HAVING COUNT(*) > 1) USING ({backtick_fields})"""
+                query_job = self.client.query(query)
+                print(query_job.result().to_dataframe().to_dict(orient='records')[:3])  # top three rows
+            else:
+                raise E
 
     def replace(self, data_batch):
-        table = self.client.create_table(table=bigquery.Table(self.table_id, schema=self.schema.schema_api), exists_ok=True)
+        try:
+            self.client.get_table(self.table_id)
+            table_exists = True
+        except google.cloud.exceptions.NotFound:
+            table_exists = False
+        if table_exists:
+            self.client.delete_table(table=self.table_id)  # doesn't work without delete
+        table = bigquery.Table(self.table_id, schema=self.schema.schema_api)
+        table = self.client.create_table(table=table, exists_ok=True)
         self.errors = self.client.insert_rows(table, data_batch)
         self.handle_errors(data_batch)
 
@@ -270,7 +288,7 @@ class Update:
         """Print the first error and the row that caused the error"""
         if self.errors:
             index, error_info = self.errors[0]["index"], self.errors[0]["errors"]
-            raise MyDataError(row=data_batch[index], error_info=error_info)
+            raise PyGBQDataError(row=data_batch[index], error_info=error_info)
 
 
 # TODO: might add support of many scopes, i.e. storage
@@ -337,7 +355,7 @@ class Client:
                 return Schema(schema_path=schema)
 
         if not isinstance(data, list):
-            raise MyError(f"Returned `{type(data)}`. Need `list`.")
+            raise PyGBQError(f"Returned `{type(data)}`. Need `list`.")
 
         table_id = self.set_table_id(table_id)
 
@@ -361,8 +379,8 @@ class Client:
             for data_batch in data_batches:
                 update.insert(data_batch=data_batch)
         elif how == 'replace':
-            update_replace = Update(client=self.client, table_id=table_id)
-            update_insert = Update(client=self.client, table_id=table_id, schema=schema)
+            update_replace = Update(client=self.client, table_id=table_id, schema=schema)
+            update_insert = Update(client=self.client, table_id=table_id)
             for i, data_batch in enumerate(data_batches):
                 # replace the table with the first data_batch and then insert
                 if i == 0:
@@ -373,9 +391,9 @@ class Client:
 
     def set_table_id(self, table_id):
         if not table_id:
-            raise MyNameError("'table_id' must be set")
+            raise PyGBQNameError("'table_id' must be set")
         if not table_id.replace("_", "").replace(".", "").isalnum():
-            raise MyNameError(
+            raise PyGBQNameError(
                 "Bad table name: only letters, numbers and underscores allowed"
             )
         num_dots = table_id.count(".")
@@ -388,7 +406,7 @@ class Client:
         # if table_id == project_id.dataset.table_name
         elif num_dots == 2:
             return table_id
-        raise MyNameError("Bad table name")
+        raise PyGBQNameError("Bad table name")
 
     def test(self, test, arguments={}):
         try:
@@ -417,14 +435,14 @@ class Client:
                 logging.exception(message)
         return message
 
-    def callback(self, callback, arguments):
-        query_job = self.client.query(callback.format(**arguments))
+    def query(self, query, arguments):
+        query_job = self.client.query(query.format(**arguments))
         try:
             query_job.result()
-            message = 'Callback executed correctly'
+            message = 'Query executed correctly'
         except Exception as E:
-            message = f"Your query '{callback}' is incorrect"
-            logging.exception(f"Your query '{callback}' is incorrect")
+            message = f"Your query '{query}' is incorrect"
+            logging.exception(f"Your query '{query}' is incorrect")
         return message
 
     def file_name_for_save(self, table_id, parameters, extension: str = ""):
@@ -463,52 +481,53 @@ class Client:
         response = self.secretmanager_client.add_secret_version(parent=parent, payload=payload)
         print("Added secret version: {}".format(response.name))
 
-    @parametrized
-    def gbq(
-            self,
-            function: Callable[[Any], List[dict]],  # any arguments and returns a list of dicts
-            table: str = None,
-            how: Union[str, List[str]] = None,
-            schema: Union[str, List[dict]] = None,
-            callback: str = None,
-            test: str = None
-    ):
-        if not table:
-            table = function.__name__
-        table_id = self.set_table_id(table)
-
-        def inner(**kwargs):
-            nonlocal how, schema
-            data = function(**kwargs)
-            results = {"data_len": len(data), **kwargs}
-            if isinstance(data, DataFrame):
-                if self.save_dir:
-                    name = self.file_name_for_save(table_id, kwargs, "csv")
-                    data.to_csv(name, index=False)
-                if how == "insert":
-                    how = "append"  # rename to to_gbq syntax
-                if data:
-                    data.to_gbq(table_id, project_id=self.project_id, if_exists=how, table_schema=schema)
-                else:
-                    logging.warning('Data is empty')
-                    results["message"] = "data is empty"
-            elif isinstance(data, list):
-                if self.save_dir:
-                    name = self.file_name_for_save(table_id, kwargs, "jsonl")
-                    save_data(data=data, name=name)
-                if how:
-                    if data:
-                        self.update_table_using_temp(data, table_id, how, schema)
-                        results["message"] = "success"
-                    else:
-                        logging.warning('Data is empty')
-                        results["message"] = "data is empty"
-            else:
-                raise MyError(f"Returned {type(data)}. Need either list or df.")
-            if test:
-                self.test(test=test, arguments=kwargs)
-            if callback:
-                self.callback(callback, kwargs)
-            return results
-
-        return inner
+    # @parametrized
+    # def gbq(
+    #         self,
+    #         function: Callable[[Any], List[dict]],  # any arguments and returns a list of dicts
+    #         table: str = None,
+    #         how: Union[str, List[str]] = None,
+    #         schema: Union[str, List[dict]] = None,
+    #         query: str = None,
+    #         test: str = None
+    # ):
+    #     if not table:
+    #         table = function.__name__
+    #         print(table)
+    #     table_id = self.set_table_id(table)
+    #
+    #     def inner(**kwargs):
+    #         nonlocal how, schema
+    #         data = function(**kwargs)
+    #         results = {"data_len": len(data), **kwargs}
+    #         if isinstance(data, DataFrame):
+    #             if self.save_dir:
+    #                 name = self.file_name_for_save(table_id, kwargs, "csv")
+    #                 data.to_csv(name, index=False)
+    #             if how == "insert":
+    #                 how = "append"  # rename to to_gbq syntax
+    #             if data:
+    #                 data.to_gbq(table_id, project_id=self.project_id, if_exists=how, table_schema=schema)
+    #             else:
+    #                 logging.warning('Data is empty')
+    #                 results["message"] = "data is empty"
+    #         elif isinstance(data, list):
+    #             if self.save_dir:
+    #                 name = self.file_name_for_save(table_id, kwargs, "jsonl")
+    #                 save_data(data=data, name=name)
+    #             if how:
+    #                 if data:
+    #                     self.update_table_using_temp(data, table_id, how, schema)
+    #                     results["message"] = "success"
+    #                 else:
+    #                     logging.warning('Data is empty')
+    #                     results["message"] = "data is empty"
+    #         else:
+    #             raise PyGBQError(f"Returned {type(data)}. Need either list or df.")
+    #         if test:
+    #             self.test(test=test, arguments=kwargs)
+    #         if query:
+    #             self.query(query, kwargs)
+    #         return results
+    #
+    #     return inner
