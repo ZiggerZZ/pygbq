@@ -171,7 +171,7 @@ class Schema:
 
     @staticmethod
     def gen_schema_from_data(data):
-        generator = SchemaGenerator('dict')
+        generator = SchemaGenerator('dict', keep_nulls=True)
         schema_map, error_logs = generator.deduce_schema(data)
         if error_logs:
             raise PyGBQError('Could not generate schema, please provide a schema')
@@ -300,9 +300,8 @@ class Client:
         client.update_table(table_name, how)
     """
 
-    def __init__(self, default_dataset: str = None, save_dir: str = None, path_to_key: str = None):
+    def __init__(self, default_dataset: str = None, path_to_key: str = None):
         self.default_dataset = default_dataset
-        self.save_dir = save_dir
 
         credentials, self.project_id = load_credentials_from_file(
             path_to_key,
@@ -357,7 +356,7 @@ class Client:
         if not isinstance(data, list):
             raise PyGBQError(f"Returned `{type(data)}`. Need `list`.")
 
-        table_id = self.set_table_id(table_id)
+        table_id = self._set_table_id(table_id)
 
         data_batches = [
             data[i * max_insert_num_rows: (i + 1) * max_insert_num_rows]
@@ -389,7 +388,7 @@ class Client:
                     update_insert.insert(data_batch=data_batch)
         return {"status": 200}
 
-    def set_table_id(self, table_id):
+    def _set_table_id(self, table_id):
         if not table_id:
             raise PyGBQNameError("'table_id' must be set")
         if not table_id.replace("_", "").replace(".", "").isalnum():
@@ -445,19 +444,19 @@ class Client:
             logging.exception(f"Your query '{query}' is incorrect")
         return message
 
-    def file_name_for_save(self, table_id, parameters, extension: str = ""):
-        """:arg extension: 'jsonl' or 'csv'"""
-        file_name = table_id
-        # TODO: drop chars not suitable for file name
-        if parameters:
-            len_kwargs = len(parameters)
-            file_name = file_name + "?"
-            for i, (arg, value) in enumerate(parameters.items()):
-                file_name = file_name + f"{arg}={value}"
-                if i < len_kwargs - 1:
-                    file_name = file_name + "&"
-        file_name = f"{file_name}.{extension}"
-        return Path(".") / self.save_dir / file_name
+    # def file_name_for_save(self, table_id, parameters, extension: str = ""):
+    #     """:arg extension: 'jsonl' or 'csv'"""
+    #     file_name = table_id
+    #     # TODO: drop chars not suitable for file name
+    #     if parameters:
+    #         len_kwargs = len(parameters)
+    #         file_name = file_name + "?"
+    #         for i, (arg, value) in enumerate(parameters.items()):
+    #             file_name = file_name + f"{arg}={value}"
+    #             if i < len_kwargs - 1:
+    #                 file_name = file_name + "&"
+    #     file_name = f"{file_name}.{extension}"
+    #     return Path(".") / self.save_dir / file_name
 
     def get_secret(self, secret_id, version="latest"):
         """
@@ -494,7 +493,7 @@ class Client:
     #     if not table:
     #         table = function.__name__
     #         print(table)
-    #     table_id = self.set_table_id(table)
+    #     table_id = self._set_table_id(table)
     #
     #     def inner(**kwargs):
     #         nonlocal how, schema
