@@ -41,7 +41,7 @@ class PyGBQDataError(PyGBQError):
 
     def __init__(self, row, error_info):
         super(PyGBQDataError, self).__init__(
-            msg=f"Row {row} caused the following errors:\n{error_info}"
+            msg=f"Error {error_info} has been cause by the row:\n{row}"
         )
 
 
@@ -408,9 +408,9 @@ class Client:
             return table_id
         raise PyGBQNameError("Bad table name")
 
-    def test(self, test, arguments={}):
+    def test(self, test):
         try:
-            result = self.client.query(test.format(**arguments)).result()
+            result = self.client.query(test.format()).result()
         except Exception as E:
             message = f"Bad test query: {test}"
             logging.exception(message)
@@ -435,8 +435,8 @@ class Client:
                 logging.exception(message)
         return message
 
-    def query(self, query, arguments):
-        query_job = self.client.query(query.format(**arguments))
+    def query(self, query):
+        query_job = self.client.query(query.format())
         try:
             query_job.result()
             message = 'Query executed correctly'

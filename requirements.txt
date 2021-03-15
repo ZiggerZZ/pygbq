@@ -6,4 +6,6 @@ google-cloud-bigquery==2.6.1
 google-cloud-logging==2.0.1
 google-cloud-secret-manager==2.1.0
 bigquery_schema_generator==1.4
+tqdm==4.56.2 # just in case, it might be used in google-cloud-bigquery
+pyarrow # for query_job.result().to_dataframe().to_dict(orient='records')[:3]
 # pytest-cov

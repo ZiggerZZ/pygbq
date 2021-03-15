@@ -1,3 +1,8 @@
 venv
 venv2
 .pytest_cache
+.idea
+build
+dist
+pygbq.egg-info
+.coverage

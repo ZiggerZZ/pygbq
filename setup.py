@@ -9,7 +9,9 @@ requirements = [
     "google-cloud-bigquery",
     "google-cloud-logging",
     "google-cloud-secret-manager",
-    "bigquery_schema_generator"
+    "bigquery_schema_generator",
+    "tqdm",
+    "pyarrow"
 ]
 
 with open("README.md", "r") as fh:
@@ -17,7 +19,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="pygbq",
-    version="0.22",
+    version="0.24",
     author="Zigfrid Zvezdin",
     author_email="ziggerzz@gmail.com",
     description="Easily integrate data in BigQuery",

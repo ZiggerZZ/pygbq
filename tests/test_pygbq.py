@@ -48,8 +48,8 @@ def test_merge():
 
 
 def test_test():
-    assert client.test(test='SELECT 1=1', arguments={}) is True
-    assert client.test(test='SELECT 1=2', arguments={}) is False
+    assert client.test(test='SELECT 1=1') is True
+    assert client.test(test='SELECT 1=2') is False
 
 
 # no need to check it outside of gbq

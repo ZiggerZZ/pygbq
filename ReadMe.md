@@ -32,7 +32,7 @@ Set up the [authentication](https://cloud.google.com/docs/authentication/getting
 
 * Client - you can set `default_dataset`, `save_dir`, `path_to_key`
 * Client.update_table_using_temp - the main update function, use `how='insert'` to insert data 
-and `how=['field1', 'field2']` to upsert by `field1` and `field2`  
+and `how=['field1', 'field2']` to upsert (merge) by `field1` and `field2`  
 * read_jsonl - read newline delimited json  
 * Client.get_secret - get a secret version from Secret Manager  
 * Client.add_secret - add a secret version to Secret Manager
